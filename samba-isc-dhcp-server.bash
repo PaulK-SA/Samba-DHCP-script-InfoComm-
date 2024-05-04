@@ -166,14 +166,17 @@ netmask 255.255.255.0
 
 End_Mess
 
+#Перезапускается служба networking.service для обновления параметров сетевого интерфейса. В Debian встречатся баг, из-за которого после однократного перезапуска этой службы адрес обновляется, однако вывод ifconfig некорректен - проблема решается двойным перезапуском службы
 systemctl restart networking.service &>/dev/null
 systemctl restart networking.service &>/dev/null
 
+#Удаляются все маршруты, кроме того, что соответствует рабочей сети. В дальнейшем результаты вывода команд ip route и ifconfig будут использоваться для ввода данных в переменные
 ip route del default
 ip route flush cache
 oldroute=`ip route | grep metric`
 ip route del $oldroute
 
+#Производится настройка первого конфигурационного файла DHCP - указывается интерфейс, через который будет осуществляться раздача адресов
 cat << End_Mess > /etc/default/isc-dhcp-server
 
 DHCPDv4_CONF=/etc/dhcp/dhcpd.conf
@@ -182,9 +185,12 @@ INTERFACESv4="ens33"
 
 End_Mess
 
+#Переменным $broadcast и $subnet назначаются значения из вывода команд ifconfig и ip route. Вывод команд "обрезается" командами awk и cut таким образом, чтобы в переменные не вносились лишние символы
 broadcast=`ifconfig | grep broadcast | awk -F 'broadcast' '{print $NF; exit}' | awk '{print $1}'`
 subnet=`ip route | cut -d' ' -f1 | rev | cut -c 4- | rev`
 
+#Производится настройка второго конфигурационного файла DHCP - указывается адрес сервера из переменной $server, действующая сеть $subnet и broadcast-адрес из переменной $broadcast
+#При использовании данного скрипта для настройки DHCP пул адресов всегда будет расчитываться из кол-ва адресов с маской подсети равной 24. Учитывая, что клиентами DHCP являются от пяти до десяти устройств, это считается приемлемым
 cat << End_Mess > /etc/dhcp/dhcpd.conf
 
 option domain-name "localhost.localdomain";
@@ -202,6 +208,7 @@ option broadcast-address $broadcast;
 
 End_Mess
 
+#Создается резервная копия конфигурационного файла Samba smb.conf
 if [ -e /etc/samba/smb.conf.copy ]
  then
   echo
@@ -209,10 +216,12 @@ if [ -e /etc/samba/smb.conf.copy ]
   cp /etc/samba/smb.conf /etc/samba/smb.copy
 fi
 
+#Создается директория для папок Samba и сама общая папка с именем из переменной $directory
 mkdir /SambaDirectories
 mkdir /SambaDirectories/$directory
 sudo chmod -R 0770 /SambaDirectories/$directory
 
+#Производится настройка конфигурационного файла Samba smb.conf. Указывается действующий интерфейс, используемый порт и роль сервера standalone. Указывается директория $directory с правами на чтение, запись и выполнение для пользователя $user
 cat << End_Mess > /etc/samba/smb.conf
 
 [global]
@@ -239,15 +248,18 @@ cat << End_Mess > /etc/samba/smb.conf
 
 End_Mess
 
+#Создается пользователь $user сперва локально (в рамках системы), затем для взаимодействия с файловым сервером.
 useradd -m $user
 echo -e "$password\n$password" | passwd $user &>/dev/null
 echo -e "$password\n$password" | smbpasswd -a $user &>/dev/null
 
+#Перезапускаются службы isc-dhcp-server и smbd.service, а также добавляются в автозагрузку
 systemctl restart isc-dhcp-server &>/dev/null
 systemctl restart smbd.service &>/dev/null
 systemctl enable smbd.service &>/dev/null
 systemctl enable isc-dhcp-server &>/dev/null
 
+#Выводится сообщение об успешном выполнении скрипта а также статус служб smbd.service и isc-dhcp-server. Также выводятся данные для подключения к файловому серверу (в качестве напоминания)
 echo
 echo -e "\033[0;1;32mСкрипт успешно завершил свою работу! \033[0m"
 echo
